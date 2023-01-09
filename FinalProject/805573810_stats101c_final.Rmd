@@ -1,0 +1,179 @@
+---
+title: "805573810_stats101c_final"
+author: "JOSHUAZHANG -- 805573810"
+date: "2022-11-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Packages
+```{r}
+library(tidyverse)
+library(tidytext)
+library(stringr)
+library(randomForest)
+library(rpart)
+library(caret)
+library(rpart.plot)
+library(adabag)
+library(ggplot2)
+```
+
+
+```{r}
+finaldata = read.csv(file = "Data_Final.csv")
+positive_words = read.table("positive-words.txt")
+negative_words = read.table("negative-words.txt")
+features = read.csv(file = "Features.csv") 
+Negative_words = read.csv(file = "NegativeWords.csv")
+Positive_words = read.csv(file = "PositiveWords.csv")
+```
+
+
+### Dimension Reduction
+```{r}
+dim(features)
+reduced_text = features[colSums(features) > 0]
+dim(reduced_text)
+```
+
+### Splitting into Testing and Training Data
+
+```{r}
+i = 1:dim(reduced_text)[1]
+i.train = sample(i, 43076, replace = F)
+x.train = reduced_text[i.train, ]
+y.train = finaldata[i.train, 4]  
+x.test = reduced_text[-i.train,]
+y.test = finaldata[-i.train,4]
+```
+
+```{r}
+x.train$TrueRating = y.train
+x.test$TrueRating = y.test
+linear_model = lm(TrueRating ~., data = x.train)
+summary(linear_model)
+predicted_Rating = predict(linear_model, x.test)
+mean((y.test - predicted_Rating)^2)
+```
+
+
+```{r}
+### PCA/R 
+library(pls)
+library(ISLR)
+pcr_reduced_text = features[colSums(features) > 0 & colSums(features) < 4000]
+i = 1:dim(pcr_reduced_text)[1]
+i.train = sample(i, 43076, replace = F)
+x.train = pcr_reduced_text[i.train, ]          
+y.train = finaldata[i.train, 4]  
+x.test = pcr_reduced_text[-i.train,]
+y.test = finaldata[-i.train,4]
+x.train$TrueRating = y.train
+x.train = x.train[colSums(x.train) >  0]
+x.test$TrueRating = y.test
+pcr_model = pcr(TrueRating~., data = x.train, scale = TRUE, ncomp = 3)
+summary(pcr_model)
+pcr_predicted = predict(pcr_model, x.test)
+mean((y.test - pcr_predicted)^2)
+```
+
+```{r}
+#True Values of the ratings 
+#Much more positive values than negative values
+#Should we make it all the same amount? 
+table(finaldata$Star)
+```
+### Changing the Final Data into Purely Numerical Data
+```{r}
+which(positive_words == "great")
+which(positive_words == "friendly")
+which(positive_words == "quaint")
+```
+```{r}
+features[1,857]
+finaldata[1,8]
+positive_words[857,]
+```
+
+```{r}
+negative_score = rowSums(Negative_words)
+positive_score = rowSums(Positive_words)
+binary_star = rep(NA, dim(finaldata)[1])
+for (i in 1:53845){
+  if(finaldata[i,4] <= 3){
+    binary_star[i] = 0 
+  }
+  else{
+    binary_star[i] = 1
+  }
+}
+elite = rep(NA, dim(finaldata)[1])
+for (i in 1:53845){
+  if(finaldata[i,16] == ""){
+    elite[i] = 0
+  }
+  else{
+    if(grepl('2021', finaldata[i,16]))
+    {
+      elite[i] = str_count(finaldata[i,16], ',')
+    }
+    else{
+      elite[i] = str_count(finaldata[i,16], ',') + 1 
+    }
+  }
+}
+numerical_data = finaldata[,c(5,6,7,11,12,13,14,15,17,18)]
+numerical_data$Elite = elite
+numerical_data$Poswords = positive_score
+numerical_data$Negwords = negative_score
+numerical_data$DiffPosWords = positive_score - negative_score
+numerical_data$Star = binary_star
+numerical_data$Poswords[1]
+```
+
+### Classification Tree
+```{r}
+set.seed(123)
+trainIndex = createDataPartition(numerical_data$Star, p = 0.7, 
+                                  list = FALSE)
+bn.training = numerical_data[trainIndex,]
+bn.test = numerical_data[-trainIndex,] # We assume we have not seen this.
+head(bn.training) # We assume that this is the data we get from our client.
+tree = rpart(Star ~., data = bn.training,method='class', minsplit = 1, minbucket =1)
+rpart.plot(tree)
+```
+### Random Forest
+```{r}
+oob_train_control = trainControl(method="oob", classProbs = TRUE, savePredictions = TRUE)
+recommended.mtry = floor(sqrt(ncol(bn.training))) ## prespecified m value
+tunegrid = expand.grid(mtry=recommended.mtry) 
+forestfit.RF = randomForest(Star ~., data = bn.training, mtry = recommended.mtry, ntree = 500, importance = TRUE)
+varImpPlot(forestfit.RF, scale = F)
+```
+```{r}
+set.seed(123)
+model = boosting(Star ~., data = bn.training, boos = TRUE, mfinal = 50)
+pred = predict(model, bn.test)
+print(pred$confusion)
+print(pred$error)
+```
+
+```{r}
+table(finaldata$Bus_Ave_Star)
+```
+
+```{r}
+data = data.frame(group = c("1", "1.5", "2", "2.5", "3", "3.5", "4", "4.5", "5"),  value = c(10,105,598,1637,3349,9808,21585,14985,1768))
+ggplot(data, aes(x =group,y= value, fill = group)) + geom_bar(stat="identity") +
+  xlab("Business Average Star") + ylab("Number of Businesses")
+```
+```{r}
+ggplot(finaldata, aes(x=User_Review_count)) + 
+  geom_histogram(color="black", fill="light blue", binwidth = 1000)
+fivenum(finaldata$User_Review_count)
+```
+
